@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import styles from "./ProjectDetail.module.css";
-import { getProjects } from "@/app/lib/projects";
+import { getProject } from "@/app/lib/projects";
 import ProjectDetailContent from "./ProjectDetailContent";
 
 export const revalidate = 3600;
@@ -11,8 +11,7 @@ interface Props {
 
 export default async function ProjectDetailPage({ params }: Props) {
   const { slug } = params;
-  const projects = await getProjects();
-  const project = projects.find((p) => p.slug === slug);
+  const project = await getProject(slug);
 
   if (!project) notFound();
 

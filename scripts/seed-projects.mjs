@@ -1,19 +1,18 @@
 /**
- * Seed script — uploads existing project data to Vercel Blob.
+ * Seed script — uploads existing project data to Upstash Redis.
  *
  * Usage:
  *   node scripts/seed-projects.mjs
  *
- * Reads BLOB_READ_WRITE_TOKEN from .env.local automatically.
- * Run once after setting up the Blob store to populate it with the
- * initial project data. Safe to re-run — overwrites the existing file.
+ * Reads UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN from .env.local.
+ * Run once after setting up Redis to populate it with initial project data.
+ * Safe to re-run — overwrites existing keys.
  */
 
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { put, list, del } from "@vercel/blob";
+import { Redis } from "@upstash/redis";
 
-// Load .env.local so the script works without manually exporting vars
 const envPath = resolve(process.cwd(), ".env.local");
 try {
   const envFile = readFileSync(envPath, "utf-8");
@@ -38,15 +37,18 @@ try {
   // No .env.local — rely on environment variables being set externally
 }
 
-if (!process.env.BLOB_READ_WRITE_TOKEN) {
+if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
   console.error(
-    "Error: BLOB_READ_WRITE_TOKEN not found.\n" +
-      "Set it in .env.local or pass it as an environment variable."
+    "Error: UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN not found.\n" +
+      "Set them in .env.local or pass them as environment variables."
   );
   process.exit(1);
 }
 
-const PROJECTS_KEY = "data/projects.json";
+const redis = Redis.fromEnv();
+
+const INDEX_KEY = "projects:index";
+const projectKey = (slug) => `project:${slug}`;
 
 const projects = [
   {
@@ -182,22 +184,27 @@ const projects = [
 ];
 
 async function seed() {
-  console.log("Seeding projects to Vercel Blob...");
+  console.log("Seeding projects to Upstash Redis...");
 
-  const { blobs } = await list({ prefix: PROJECTS_KEY, limit: 1 });
-  if (blobs.length > 0) {
-    console.log("Deleting existing projects.json...");
-    await del(blobs[0].url);
+  // Clear existing index
+  await redis.del(INDEX_KEY);
+  for (const p of projects) {
+    await redis.del(projectKey(p.slug));
   }
 
-  const result = await put(
-    PROJECTS_KEY,
-    JSON.stringify(projects, null, 2),
-    { access: "public", addRandomSuffix: false }
-  );
+  // Write each project and build the index
+  const pipeline = redis.pipeline();
+  const slugs = projects.map((p) => p.slug);
+
+  for (const p of projects) {
+    pipeline.set(projectKey(p.slug), p);
+  }
+  pipeline.rpush(INDEX_KEY, ...slugs);
+
+  await pipeline.exec();
 
   console.log(`Seeded ${projects.length} projects.`);
-  console.log(`Blob URL: ${result.url}`);
+  console.log(`Slugs: ${slugs.join(", ")}`);
 }
 
 seed().catch((err) => {

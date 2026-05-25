@@ -42,7 +42,7 @@ app/
 │   └── [other components with .module.css for styling]
 ├── lib/
 │   ├── auth.ts         # HMAC cookie auth (ADMIN_PASSWORD env var)
-│   └── projects.ts     # Read/write projects JSON from Vercel Blob
+│   └── projects.ts     # Read/write project data via Upstash Redis + image upload to Vercel Blob
 ├── admin/              # Password-protected admin panel
 │   ├── page.tsx        # Server component — checks auth, loads data
 │   ├── AdminClient.tsx # Client component — CRUD dashboard
@@ -51,11 +51,11 @@ app/
 │   └── Admin.module.css
 ├── Projects/
 │   ├── data/types.ts   # Project & TeamMember interfaces
-│   ├── page.tsx        # Server Component — fetches from Blob (ISR 1h)
+│   ├── page.tsx        # Server Component — fetches from Redis (ISR 1h)
 │   ├── ProjectsContent.tsx  # Client component — filter/grid
 │   ├── Projects.module.css
 │   └── [slug]/
-│       ├── page.tsx              # Server Component — fetches from Blob
+│       ├── page.tsx              # Server Component — fetches single project from Redis
 │       ├── ProjectDetailContent.tsx  # Client component — carousel/content
 │       └── ProjectDetail.module.css
 ├── layout.tsx          # Root layout with global structure
@@ -68,7 +68,7 @@ app/
 └── fonts/              # Custom fonts (Inter, Roboto Mono)
 
 scripts/
-├── seed-projects.mjs   # One-time seed of existing projects to Blob
+├── seed-projects.mjs   # One-time seed of existing projects to Upstash Redis
 
 public/
 ├── images/             # Static images (local)
@@ -138,8 +138,12 @@ The home page (`app/page.tsx`) demonstrates a custom `ScrollReveal` component us
 ## Project Data & Admin Panel
 
 ### How Project Data Works
-- Project data lives in Vercel Blob as `data/projects.json` (not in the repo)
-- The `/Projects` page fetches from Blob at render time with ISR (revalidates every 1 hour)
+- Project data is stored in Upstash Redis as per-project keys:
+  - `projects:index` — a Redis list of all project slugs (maintains order)
+  - `project:{slug}` — a JSON object for each individual project
+- Images/PDFs remain on Vercel Blob (CDN) — Redis stores only the URLs
+- The `/Projects` page fetches all projects from Redis at render time with ISR (revalidates every 1 hour)
+- The `/Projects/[slug]` detail page fetches a single project (1 Redis GET)
 - When projects are added/edited/deleted via the admin panel, `revalidatePath()` busts the cache immediately
 - The `Project` and `TeamMember` interfaces are defined in `app/Projects/data/types.ts`
 
@@ -152,20 +156,21 @@ The home page (`app/page.tsx`) demonstrates a custom `ScrollReveal` component us
 ### Environment Variables Required
 | Variable | Purpose |
 |---|---|
-| `BLOB_READ_WRITE_TOKEN` | Vercel Blob access (auto-set when you link a Blob store in Vercel) |
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob access for image/PDF uploads (auto-set when you link a Blob store in Vercel) |
 | `ADMIN_PASSWORD` | Password for the `/admin` route |
+| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST API URL |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST API token |
 
 ### Seeding Initial Data
-Run once after setting up the Blob store:
+Run once after setting up the Redis store:
 ```powershell
-$env:BLOB_READ_WRITE_TOKEN = "vercel_blob_..."
 node scripts/seed-projects.mjs
 ```
 
 ### Adding a Project (via Admin)
 1. Go to `/admin` and log in
 2. Click "Add Project" and fill in the form
-3. Submit — project is saved to Blob and the showcase page updates immediately
+3. Submit — project is saved to Redis (images uploaded to Blob) and the showcase page updates immediately
 
 ## Common Development Tasks
 
@@ -196,7 +201,8 @@ The `Timelines/` folder contains multiple timeline variants:
 
 - **Analytics:** `@vercel/analytics/react` imported in layout
 - **Speed Insights:** `@vercel/speed-insights/next` imported in layout
-- **Blob Storage:** Used for hosting images and PDFs
+- **Blob Storage:** Used for hosting images and PDFs (CDN)
+- **Upstash Redis:** Used for project data storage (structured JSON)
 - **Deployment:** Automatic on push to main branch
 
 ## Notes for Future Development

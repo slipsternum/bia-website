@@ -3,7 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { createHmac, timingSafeEqual } from "crypto";
-import { getProjects, saveProjects, uploadImage } from "@/app/lib/projects";
+import {
+  getProjects,
+  getProject,
+  saveProject,
+  deleteProjectBySlug,
+  uploadImage,
+} from "@/app/lib/projects";
 import { Project } from "@/app/Projects/data/types";
 
 const COOKIE_NAME = "admin_session";
@@ -113,8 +119,8 @@ export async function addProject(
     const slug = slugify(title);
     if (!slug) return { success: false, error: "Title is required" };
 
-    const projects = await getProjects();
-    if (projects.some((p) => p.slug === slug)) {
+    const existing = await getProject(slug);
+    if (existing) {
       return {
         success: false,
         error: "A project with this title already exists",
@@ -147,8 +153,7 @@ export async function addProject(
       sourceUrl: (formData.get("sourceUrl") as string) || undefined,
     };
 
-    projects.push(project);
-    await saveProjects(projects);
+    await saveProject(project);
     revalidatePath("/Projects");
     revalidatePath("/Projects/" + slug);
     return { success: true };
@@ -168,44 +173,43 @@ export async function updateProject(
     const slug = formData.get("slug") as string;
     if (!slug) return { success: false, error: "Project slug is required" };
 
-    const projects = await getProjects();
-    const idx = projects.findIndex((p) => p.slug === slug);
-    if (idx === -1) return { success: false, error: "Project not found" };
+    const existing = await getProject(slug);
+    if (!existing) return { success: false, error: "Project not found" };
 
     const { coverImage, images } = await processImages(formData);
     const badge = (formData.get("badge") as "DAP" | "AI Lodge") || "DAP";
 
-    projects[idx] = {
-      ...projects[idx],
-      title: (formData.get("title") as string) || projects[idx].title,
+    const updated: Project = {
+      ...existing,
+      title: (formData.get("title") as string) || existing.title,
       description:
-        (formData.get("description") as string) || projects[idx].description,
+        (formData.get("description") as string) || existing.description,
       badge,
-      category: (formData.get("category") as string) || projects[idx].category,
-      coverImage: coverImage || projects[idx].coverImage,
-      images: images.length > 0 ? images : projects[idx].images,
-      overview: (formData.get("overview") as string) || projects[idx].overview,
+      category: (formData.get("category") as string) || existing.category,
+      coverImage: coverImage || existing.coverImage,
+      images: images.length > 0 ? images : existing.images,
+      overview: (formData.get("overview") as string) || existing.overview,
       rationale:
-        (formData.get("rationale") as string) || projects[idx].rationale,
+        (formData.get("rationale") as string) || existing.rationale,
       lessons: {
         satisfaction:
           (formData.get("satisfaction") as string) ||
-          projects[idx].lessons.satisfaction,
+          existing.lessons.satisfaction,
         takeaway:
           (formData.get("takeaway") as string) ||
-          projects[idx].lessons.takeaway,
+          existing.lessons.takeaway,
       },
       team: parseTeam(formData),
       programme: badge,
       status:
         (formData.get("status") as "Completed" | "Ongoing") ||
-        projects[idx].status,
+        existing.status,
       techStack: parseTechStack(formData),
       demoUrl: (formData.get("demoUrl") as string) || undefined,
       sourceUrl: (formData.get("sourceUrl") as string) || undefined,
     };
 
-    await saveProjects(projects);
+    await saveProject(updated);
     revalidatePath("/Projects");
     revalidatePath("/Projects/" + slug);
     return { success: true };
@@ -222,13 +226,10 @@ export async function deleteProject(
   }
 
   try {
-    const projects = await getProjects();
-    const filtered = projects.filter((p) => p.slug !== slug);
-    if (filtered.length === projects.length) {
+    const removed = await deleteProjectBySlug(slug);
+    if (!removed) {
       return { success: false, error: "Project not found" };
     }
-
-    await saveProjects(filtered);
     revalidatePath("/Projects");
     return { success: true };
   } catch (e) {
